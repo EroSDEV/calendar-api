@@ -1,61 +1,45 @@
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept');
-  
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
+  // Validar token cron
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (token !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
+    console.log('[Sync] Sincronizando...');
+
+    // Lazy import
     const { kv } = await import('@vercel/kv');
 
-    console.log('[Calendar] Buscando en KV...');
+    const calendarUrl = 'https://calendar.gt.tc/index.php?format=json&from=2025-11-01&to=2025-12-31&countries=32,37,25,72,6,22,17,39,14&importance=1,2,3';
 
-    // Intentar obtener desde KV
-    let calendarData = await kv.get('calendar-data');
+    const response = await fetch(calendarUrl);
 
-    if (calendarData) {
-      console.log('[Calendar] ✅ Desde KV');
-      if (typeof calendarData === 'string') {
-        calendarData = JSON.parse(calendarData);
-      }
-    } else {
-      console.log('[Calendar] KV vacío, intentando de InfinityFree...');
-
-      const calendarUrl = 'https://calendar.gt.tc/index.php?format=json&from=2025-11-01&to=2025-12-31&countries=32,37,25,72,6,22,17,39,14&importance=1,2,3';
-
-      const response = await fetch(calendarUrl);
-
-      if (response.ok) {
-        calendarData = await response.json();
-        console.log('[Calendar] ✅ Desde InfinityFree');
-
-        // Guardar en KV
-        try {
-          await kv.set('calendar-data', JSON.stringify(calendarData), { ex: 3600 });
-        } catch (e) {
-          console.log('[Calendar] No se pudo guardar:', e.message);
-        }
-      }
+    if (!response.ok) {
+      console.error('[Sync] InfinityFree error:', response.status);
+      return res.status(500).json({ error: 'InfinityFree error' });
     }
 
-    if (!calendarData) {
-      return res.status(503).json({
-        error: 'Calendar data not available',
-        details: 'No data in KV and fetch failed'
-      });
-    }
+    const data = await response.json();
 
-    res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600');
-    res.status(200).json(calendarData);
+    // Guardar en KV
+    await kv.set('calendar-data', JSON.stringify(data), { ex: 3600 });
+
+    const eventCount = Object.keys(data.data?.events_by_date || {}).reduce(
+      (sum, date) => sum + (data.data.events_by_date[date]?.length || 0),
+      0
+    );
+
+    console.log('[Sync] ✅ Sincronizado:', eventCount, 'eventos');
+
+    res.status(200).json({
+      status: 'success',
+      timestamp: new Date().toISOString(),
+      total_events: eventCount
+    });
 
   } catch (error) {
-    console.error('[Calendar] Error:', error.message);
-    res.status(500).json({
-      error: 'Calendar error',
-      details: error.message
-    });
+    console.error('[Sync] Error:', error.message);
+    res.status(500).json({ error: 'Sync failed', details: error.message });
   }
 }
