@@ -1,9 +1,8 @@
 {
-  "version": 2,
-  "crons": [
-    {
-      "path": "/api/sync-calendar",
-      "schedule": "*/10 * * * *"
-    }
-  ]
+  "name": "calendar-proxy",
+  "version": "1.0.0",
+  "description": "Calendar proxy with KV caching",
+  "dependencies": {
+    "@vercel/kv": "latest"
+  }
 }
