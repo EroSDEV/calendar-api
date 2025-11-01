@@ -2,7 +2,5 @@
   "name": "calendar-proxy",
   "version": "1.0.0",
   "description": "Calendar proxy",
-  "dependencies": {
-    "cloudscraper": "1.4.0"
-  }
+  "dependencies": {}
 }
