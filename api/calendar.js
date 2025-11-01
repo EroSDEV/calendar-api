@@ -1,3 +1,5 @@
+import cloudscraper from 'cloudscraper';
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -16,11 +18,10 @@ export default async function handler(req, res) {
     const countriesParam = countries || '32,37,25,72,6,22,17,39,14';
     const importanceParam = importance || '1,2,3';
 
-    console.log('[Vercel] Fetching economic calendar data');
-    console.log('[Vercel] Date range:', dateFrom, 'to', dateTo);
+    console.log('[Vercel] Using cloudscraper to bypass Cloudflare');
 
-    // POST body - EXACTO como tu PHP
-    const postData = new URLSearchParams({
+    // POST data
+    const postData = {
       'dateFrom': dateFrom,
       'dateTo': dateTo,
       'country': countriesParam,
@@ -28,47 +29,43 @@ export default async function handler(req, res) {
       'timeZone': '8',
       'timeFilter': 'timeRemain',
       'currentTab': 'custom'
-    }).toString();
+    };
 
     const investingUrl = 'https://www.investing.com/economic-calendar/Service/getCalendarFilteredData';
 
-    // MÉTODO POST - como tu PHP hace con cURL
-    const response = await fetch(investingUrl, {
-      method: 'POST',  // ← IMPORTANTE: POST, no GET
+    console.log('[Vercel] Calling investing.com with cloudscraper...');
+
+    // cloudscraper maneja automáticamente Cloudflare
+    const response = await cloudscraper.post(investingUrl, {
       headers: {
         'authority': 'www.investing.com',
         'accept': 'application/json, text/javascript, */*; q=0.01',
-        'content-type': 'application/x-www-form-urlencoded',  // ← Content-Type correcto
+        'content-type': 'application/x-www-form-urlencoded',
         'origin': 'https://www.investing.com',
         'referer': 'https://www.investing.com/economic-calendar/',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'x-requested-with': 'XMLHttpRequest'
       },
-      body: postData  // ← Body con URLSearchParams
+      form: postData
     });
 
-    console.log('[Vercel] Response status:', response.status);
+    console.log('[Vercel] ✅ Response received');
 
-    if (!response.ok) {
-      console.error('[Vercel] HTTP error:', response.status);
-      const text = await response.text();
-      return res.status(response.status).json({
-        error: `HTTP ${response.status}`,
-        details: text.substring(0, 200)
-      });
+    let jsonData;
+    if (typeof response === 'string') {
+      jsonData = JSON.parse(response);
+    } else {
+      jsonData = response;
     }
-
-    const jsonData = await response.json();
 
     if (!jsonData.data) {
       console.error('[Vercel] Missing data field');
       return res.status(500).json({
-        error: 'Invalid response from investing.com',
+        error: 'Invalid response',
         received: Object.keys(jsonData)
       });
     }
 
-    console.log('[Vercel] ✅ Data received, parsing...');
+    console.log('[Vercel] Parsing HTML...');
 
     const groupedEvents = parseInvestingHTML(jsonData.data);
 
@@ -90,7 +87,7 @@ export default async function handler(req, res) {
     const result = {
       status: 'success',
       metadata: {
-        source: 'investing.com',
+        source: 'investing.com (via cloudscraper)',
         generated_at: new Date().toISOString().replace('T', ' ').substring(0, 19),
         generated_timestamp: Math.floor(Date.now() / 1000),
         timezone: 'UTC',
@@ -124,7 +121,7 @@ export default async function handler(req, res) {
     res.status(200).json(result);
 
   } catch (error) {
-    console.error('[Vercel] Exception:', error.message);
+    console.error('[Vercel] Error:', error.message);
     res.status(500).json({
       error: 'Proxy error',
       details: error.message
