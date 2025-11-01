@@ -1,0 +1,10 @@
+{
+  "name": "calendar-proxy",
+  "version": "1.0.0",
+  "description": "Proxy para calendar.gt.tc compatible con Ohara.ai",
+  "main": "api/calendar.js",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {}
+}
