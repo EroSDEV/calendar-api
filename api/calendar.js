@@ -17,92 +17,151 @@ export default async function handler(req, res) {
     const countriesParam = countries || '32,37,25,72,6,22,17,39,14';
     const importanceParam = importance || '1,2,3';
 
-    const params = new URLSearchParams({
-      format: 'json',
-      from: dateFrom,
-      to: dateTo,
-      countries: countriesParam,
-      importance: importanceParam
+    console.log('[Proxy] Calling investing.com directly');
+    console.log('[Proxy] Date range:', dateFrom, 'to', dateTo);
+
+    // Llamar directamente a investing.com (bypass InfinityFree)
+    const postData = new URLSearchParams({
+      'dateFrom': dateFrom,
+      'dateTo': dateTo,
+      'country': countriesParam,
+      'importance': importanceParam,
+      'timeZone': '8',
+      'timeFilter': 'timeRemain',
+      'currentTab': 'custom'
     });
 
-    const apiUrl = `https://calendar.gt.tc/index.php?${params.toString()}`;
+    const investingUrl = 'https://www.investing.com/economic-calendar/Service/getCalendarFilteredData';
 
-    console.log('[Proxy] Fetching:', apiUrl);
-
-    // Headers que simulan un navegador Chrome real
-    const response = await fetch(apiUrl, {
-      method: 'GET',
+    const response = await fetch(investingUrl, {
+      method: 'POST',
       headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-        'Accept-Language': 'en-US,en;q=0.9,es;q=0.8',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'DNT': '1',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1',
-        'Cache-Control': 'max-age=0',
+        'Accept': 'application/json, text/javascript, */*; q=0.01',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Origin': 'https://www.investing.com',
+        'Referer': 'https://www.investing.com/economic-calendar/',
+        'X-Requested-With': 'XMLHttpRequest',
         'sec-ch-ua': '"Chromium";v="120", "Google Chrome";v="120", "Not-A.Brand";v="99"',
         'sec-ch-ua-mobile': '?0',
         'sec-ch-ua-platform': '"Windows"',
       },
+      body: postData.toString()
     });
 
-    console.log('[Proxy] Response status:', response.status);
-    console.log('[Proxy] Content-Type:', response.headers.get('content-type'));
+    console.log('[Proxy] Investing.com response status:', response.status);
 
     if (!response.ok) {
-      const text = await response.text();
-      console.error('[Proxy] Error response:', text.substring(0, 500));
       return res.status(response.status).json({
-        error: `Calendar API returned ${response.status}`,
-        details: text.substring(0, 200)
+        error: `Investing.com returned ${response.status}`
       });
     }
 
-    const text = await response.text();
+    const data = await response.json();
     
-    console.log('[Proxy] Response preview:', text.substring(0, 100));
-
-    // Verificar si es HTML (antibot)
-    if (text.includes('<html') || text.includes('<script') || text.includes('<!DOCTYPE')) {
-      console.error('[Proxy] Anti-bot challenge detected');
-      
-      // Intentar extraer más información del error
-      const isCloudflare = text.includes('cloudflare') || text.includes('cf-');
-      const isInfinityFree = text.includes('infinityfree') || text.includes('aes.js');
-      
-      return res.status(503).json({
-        error: 'Server returned HTML instead of JSON',
-        details: isCloudflare ? 'Cloudflare challenge' : isInfinityFree ? 'InfinityFree anti-bot' : 'Unknown protection',
-        preview: text.substring(0, 300)
-      });
-    }
-
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch (parseError) {
-      console.error('[Proxy] JSON parse error');
+    if (!data.data) {
+      console.error('[Proxy] Invalid response structure');
       return res.status(500).json({
-        error: 'Invalid JSON from calendar API',
-        details: text.substring(0, 200)
+        error: 'Invalid response from investing.com',
+        details: 'Missing data field'
       });
     }
 
-    console.log('[Proxy] ✅ Success! Events:', data.metadata?.total_events || 'unknown');
+    console.log('[Proxy] ✅ Success! Raw HTML received, processing...');
+
+    // Parsear el HTML y extraer eventos (simplificado)
+    const events = parseInvestingHTML(data.data);
+
+    const result = {
+      status: 'success',
+      metadata: {
+        source: 'investing.com',
+        generated_at: new Date().toISOString(),
+        generated_timestamp: Date.now(),
+        timezone: 'UTC',
+        query_parameters: {
+          date_from: dateFrom,
+          date_to: dateTo,
+          countries: countriesParam.split(','),
+          importance_filter: importanceParam.split(',')
+        }
+      },
+      data: {
+        events_by_date: events,
+        summary: {
+          total: Object.values(events).reduce((acc, arr) => acc + arr.length, 0)
+        }
+      }
+    };
+
+    console.log('[Proxy] Total events:', result.data.summary.total);
 
     res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600');
-    res.status(200).json(data);
+    res.status(200).json(result);
 
   } catch (error) {
-    console.error('[Proxy] Exception:', error.message);
+    console.error('[Proxy] Error:', error.message);
     res.status(500).json({
-      error: 'Proxy internal error',
+      error: 'Proxy error',
       details: error.message
     });
   }
+}
+
+// Parser básico del HTML de investing.com
+function parseInvestingHTML(html) {
+  const events = {};
+  
+  try {
+    // Usar regex simple para extraer eventos del HTML
+    // Este es un parser básico - puede mejorarse
+    
+    const dateMatches = html.matchAll(/<td colspan="9" class="theDay"[^>]*>([^<]+)<\/td>/g);
+    const rowMatches = html.matchAll(/id="eventRowId_(\d+)"[^>]*>([\s\S]*?)<\/tr>/g);
+    
+    let currentDate = '';
+    
+    for (const match of dateMatches) {
+      currentDate = match[1].trim();
+      if (!events[currentDate]) {
+        events[currentDate] = [];
+      }
+    }
+    
+    for (const match of rowMatches) {
+      const eventId = match[1];
+      const rowHtml = match[2];
+      
+      // Extraer datos básicos con regex
+      const timeMatch = rowHtml.match(/<td[^>]*class="[^"]*time[^"]*"[^>]*>([^<]+)<\/td>/);
+      const currencyMatch = rowHtml.match(/<span[^>]*title="[^"]*"[^>]*>([A-Z]{3})<\/span>/);
+      const eventMatch = rowHtml.match(/<a[^>]*>([^<]+)<\/a>|<span[^>]*>([^<]+)<\/span>/);
+      const importanceMatch = rowHtml.match(/grayFullBullishIcon/g);
+      
+      const event = {
+        id: eventId,
+        time: timeMatch ? timeMatch[1].trim() : 'All Day',
+        currency: currencyMatch ? currencyMatch[1] : '',
+        event_name: eventMatch ? (eventMatch[1] || eventMatch[2] || '').trim() : '',
+        importance: importanceMatch ? importanceMatch.length : 1,
+        actual: '',
+        forecast: '',
+        previous: ''
+      };
+      
+      // Solo agregar si tiene nombre
+      if (event.event_name && currentDate) {
+        if (!events[currentDate]) {
+          events[currentDate] = [];
+        }
+        events[currentDate].push(event);
+      }
+    }
+    
+  } catch (error) {
+    console.error('[Parser] Error:', error.message);
+  }
+  
+  return events;
 }
