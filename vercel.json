@@ -1,26 +1,9 @@
 {
   "version": 2,
-  "headers": [
+  "crons": [
     {
-      "source": "/api/(.*)",
-      "headers": [
-        {
-          "key": "Access-Control-Allow-Origin",
-          "value": "*"
-        },
-        {
-          "key": "Access-Control-Allow-Methods",
-          "value": "GET, POST, OPTIONS"
-        },
-        {
-          "key": "Access-Control-Allow-Headers",
-          "value": "Content-Type, Accept"
-        },
-        {
-          "key": "Access-Control-Max-Age",
-          "value": "86400"
-        }
-      ]
+      "path": "/api/sync-calendar",
+      "schedule": "*/10 * * * *"
     }
   ]
 }
