@@ -11,69 +11,52 @@ export default async function handler(req, res) {
   try {
     const { from, to, countries, importance } = req.query;
 
-    const dateFrom = from || new Date().toISOString().split('T')[0];
-    const dateTo = to || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const countriesParam = countries || '32,37,25,72,6,22,17,39,14';
-    const importanceParam = importance || '1,2,3';
+    console.log('[Calendar] Obteniendo datos...');
 
-    console.log('[Vercel] Intentando obtener datos...');
+    // Importar KV
+    const { kv } = await import('@vercel/kv');
 
-    // Intentar primero desde calendar.gt.tc
-    let data = null;
-    let source = '';
+    // Leer desde cache de Vercel KV
+    let cachedData = await kv.get('calendar-data');
 
-    try {
-      console.log('[Vercel] Intentando: calendar.gt.tc/index.php');
-      const response = await fetch(
-        `https://calendar.gt.tc/index.php?format=json&from=${dateFrom}&to=${dateTo}&countries=${countriesParam}&importance=${importanceParam}`,
-        { method: 'GET', headers: { 'Accept': 'application/json' } }
-      );
+    if (!cachedData) {
+      console.log('[Calendar] No hay cache, intentando sincronizar...');
+      
+      // Si no hay cache, intentar obtener directamente
+      try {
+        const response = await fetch(
+          `https://calendar.gt.tc/index.php?format=json&from=${from || new Date().toISOString().split('T')[0]}&to=${to || new Date(Date.now() + 7*24*60*60*1000).toISOString().split('T')[0]}&countries=${countries || '32,37,25'}&importance=${importance || '1,2,3'}`,
+          { method: 'GET', headers: { 'Accept': 'application/json' } }
+        );
 
-      if (response.ok) {
-        data = await response.json();
-        source = 'calendar.gt.tc';
-        console.log('[Vercel] ✅ Datos obtenidos desde calendar.gt.tc');
-      }
-    } catch (error) {
-      console.log('[Vercel] calendar.gt.tc falló:', error.message);
-    }
-
-    // Si falló, usar datos mock (último recurso)
-    if (!data) {
-      console.log('[Vercel] Usando datos mock como fallback');
-      data = {
-        status: 'success',
-        metadata: {
-          source: 'mock-data',
-          generated_at: new Date().toISOString().replace('T', ' ').substring(0, 19),
-          total_events: 0,
-          warning: 'Calendar service temporarily unavailable, showing cached data'
-        },
-        data: {
-          events_by_date: {},
-          summary: { total: 0 }
+        if (response.ok) {
+          cachedData = await response.json();
+          // Guardar en cache para próximas peticiones
+          await kv.set('calendar-data', JSON.stringify(cachedData), { ex: 3600 });
+          console.log('[Calendar] ✅ Datos obtenidos directamente');
         }
-      };
-      source = 'mock';
+      } catch (e) {
+        console.error('[Calendar] No se pudo obtener datos:', e.message);
+      }
+    } else {
+      console.log('[Calendar] ✅ Usando datos cacheados');
+      cachedData = JSON.parse(cachedData);
     }
 
-    // Asegurar estructura correcta
-    if (!data.metadata) {
-      data.metadata = {
-        source: source,
-        generated_at: new Date().toISOString().replace('T', ' ').substring(0, 19)
-      };
+    if (!cachedData) {
+      return res.status(503).json({
+        error: 'Calendar data not available',
+        details: 'Cache is empty and direct fetch failed'
+      });
     }
-
-    console.log('[Vercel] ✅ Devolviendo datos desde:', source);
 
     res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600');
-    res.status(200).json(data);
+    res.status(200).json(cachedData);
 
   } catch (error) {
-    console.error('[Vercel] Error:', error.message);
+    console.error('[Calendar] Error:', error.message);
     res.status(500).json({
-      error: 'Proxy error',
+      error: 'Calendar error',
       details: error.message
     });
   }
